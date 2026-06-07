@@ -1,86 +1,110 @@
-# Lab 13 - Bypass de détection root avec Objection
+# Lab 13 – Contournement de la détection root sur Android
 
-## Informations
+**Auteur :** Charaf  
+**Application testée :** Uncrackable1 (`owasp.mstg.uncrackable1`)  
+**Outils utilisés :** Frida, Objection, ADB
 
-- Auteur : Charaf
-- Usage : support de lab personnel et académique.
+---
 
-## Objectif
+## Contexte
 
-Le but de ce lab est d'utiliser Objection avec Frida pour contourner une détection root dans une application Android.
+Certaines applications Android refusent de fonctionner sur un appareil rooté. Elles vérifient la présence de binaires comme `su`, de packages suspects ou de propriétés système révélatrices. Dans ce lab, j'ai utilisé Objection (basé sur Frida) pour contourner cette protection sur l'application `Uncrackable1` de l'OWASP MSTG.
 
-Application utilisée : `Uncrackable1`  
-Package : `owasp.mstg.uncrackable1`
+---
 
-## Installation d'Objection
+## Mise en place
 
-Objection a été installé avec `pipx` :
+### Installation d'Objection
+
+J'ai installé Objection via `pipx` depuis le terminal :
 
 ```powershell
 pipx install objection
 ```
 
-La capture suivante montre que l'installation est terminée et que la commande `objection.exe` est disponible.
+Une fois l'installation terminée, la commande `objection.exe` est disponible dans le PATH.
 
-![Installation Objection](screens/01_objection_install.png)
+<img width="452" height="61" alt="image" src="https://github.com/user-attachments/assets/751b7f97-9fc6-4d4f-8a64-656a4714c116" />
 
-## Vérification de Frida et de l'application cible
 
-Après avoir lancé `frida-server` sur l'appareil Android, j'ai vérifié depuis le PC que Frida voyait les applications avec :
+### Vérification avec Frida
+
+Avant de commencer, j'ai vérifié que Frida reconnaissait correctement l'émulateur et l'application cible. J'ai lancé `frida-server` sur l'appareil Android, puis depuis le PC :
 
 ```powershell
 frida-ps -Uai
 ```
 
-Dans la liste, on voit l'application cible :
+L'application apparaît bien dans la liste :
 
-```text
+```
 Uncrackable1    owasp.mstg.uncrackable1
 ```
 
-![Liste des processus Frida](screens/02_frida_processes.png)
+<img width="645" height="403" alt="image" src="https://github.com/user-attachments/assets/67e31fd1-498c-4f0e-9932-dff48b0ee028" />
 
-## Test avant bypass
 
-Avant d'utiliser Objection, l'application est lancée normalement sur l'émulateur.
+---
 
-Elle détecte que l'appareil est root et affiche le message :
+## Comportement de l'application sans bypass
 
-```text
+Au lancement normal de l'application sur l'émulateur rooté, elle détecte immédiatement l'environnement et affiche :
+
+```
 Root detected!
 This is unacceptable. The app is now going to exit.
 ```
 
-Cette capture prouve que la protection root est active.
+L'application se ferme automatiquement. La protection est donc bien active.
 
-![Root détecté avant bypass](screens/03_root_detected_before.png)
+<img width="200" height="289" alt="image" src="https://github.com/user-attachments/assets/c3580072-8759-47f5-8edb-e6a8002b82f9" />
+
+
+---
 
 ## Bypass avec Objection
 
-Ensuite, je lance Objection sur le package de l'application :
+Pour contourner cette protection, j'ai attaché Objection au processus de l'application :
 
 ```powershell
 objection -g owasp.mstg.uncrackable1 explore
 ```
 
-Dans la console Objection, j'exécute la commande :
+Une fois dans la console interactive d'Objection, j'ai exécuté :
 
-```text
+```
 android root disable
 ```
 
-Cette commande installe des hooks Frida pour neutraliser plusieurs contrôles root côté Java, comme les recherches de fichiers `su`, certaines commandes système et des méthodes de détection root.
+Cette commande injecte automatiquement des hooks Frida qui neutralisent les méthodes Java de détection root les plus courantes : recherche de fichiers `su`, vérification de packages, appels à `Runtime.exec`, etc.
 
-La console indique que le job `root-detection-disable` est enregistré.
+La console confirme que le job `root-detection-disable` est bien enregistré et actif.
 
-![Commande android root disable](screens/04_objection_root_disable.png)
+<img width="597" height="207" alt="image" src="https://github.com/user-attachments/assets/3e5336fe-d0b1-4fe0-9482-00bc554e375f" />
+
+
+---
+
+## Ce que fait `android root disable`
+
+Derrière cette commande, Objection installe des hooks sur plusieurs points de vérification côté Java :
+
+- **`File.exists()`** → retourne `false` pour les chemins suspects (`/sbin/su`, `/system/xbin/su`, etc.)
+- **`Runtime.exec()`** → bloque les commandes `which su`, `busybox`, etc.
+- **`PackageManager`** → cache les packages root comme Magisk ou SuperSU
+- **`Build.TAGS`** → retourne `release-keys` au lieu de `test-keys`
+- **Propriétés système** → `ro.debuggable` forcé à `0`, `ro.secure` forcé à `1`
+
+L'application continue de tourner mais toutes ses vérifications root renvoient des résultats normaux.
+
+---
 
 ## Résultat
 
-La détection root est contournée en attachant Objection à l'application et en exécutant `android root disable`.
+Après l'activation du module `android root disable`, l'application ne détecte plus le root et démarre normalement. Le bypass est entièrement dynamique : aucune modification de l'APK n'est nécessaire.
 
-Le principe du bypass est que l'application continue de tourner, mais les contrôles root les plus courants sont interceptés par Frida avant de retourner leur résultat à l'application.
+---
 
 ## Conclusion
 
-Objection facilite le bypass des détections root Android côté Java. Dans ce lab, l'application `Uncrackable1` détecte le root avant instrumentation, puis Objection applique le module `android root disable` pour neutraliser cette détection.
+Ce lab illustre une limite fondamentale des protections root côté Java : elles peuvent être contournées par instrumentation dynamique. Objection rend cette opération accessible en une seule commande. Pour une protection plus robuste, une application devrait combiner des vérifications natives (NDK) avec des contrôles côté serveur, ce qui rend le bypass beaucoup plus difficile.
